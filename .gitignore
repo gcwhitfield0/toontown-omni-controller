@@ -1,0 +1,5 @@
+# Claude Code local settings / session data — never publish
+.claude/
+
+# Rust build output
+target/
