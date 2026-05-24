@@ -7,7 +7,7 @@
 //! links it to the slot. (Drawing a border on the game window is out of scope, so the
 //! confirmation appears in-app instead.)
 
-use crate::config::{Slot, WindowTarget, MAX_SLOTS, MIN_SLOTS};
+use crate::config::{Config, Slot, WindowTarget, MAX_SLOTS, MIN_SLOTS};
 use crate::platform::WindowInfo;
 use crate::ui::{key_combo, HighlightIntent, MultiToonApp};
 
@@ -16,6 +16,9 @@ const CROSSHAIR: &str = "✛";
 
 /// Draws the entire slots panel into `ui`.
 pub(crate) fn show(app: &mut MultiToonApp, ui: &mut egui::Ui) {
+    show_quick_setup(app, ui);
+    ui.separator();
+
     ui.heading("Slots");
     ui.label("Drag a slot's ✛ crosshair onto its Toontown window to link it.");
     show_window_controls(app, ui);
@@ -84,6 +87,26 @@ struct CrosshairState {
     hovered: bool,
     /// The crosshair is being dragged right now.
     dragged: bool,
+}
+
+/// Renders the one-click "Quick setup": choose a toon count and regenerate the whole
+/// config (slots + default WASD/Space bindings broadcast to all of them) in one go.
+/// This is the fast path; the per-key bindings panel is the advanced way to tweak it.
+fn show_quick_setup(app: &mut MultiToonApp, ui: &mut egui::Ui) {
+    ui.heading("Quick setup");
+    ui.horizontal(|ui| {
+        ui.label("Number of toons:");
+        ui.add(egui::DragValue::new(&mut app.quick_setup_count).range(MIN_SLOTS..=MAX_SLOTS));
+        let generate = ui.button("Generate").on_hover_text(
+            "Replaces all slots and bindings with this many toons, each pre-bound to \
+             WASD + Space. Then link each slot to a window.",
+        );
+        if generate.clicked() {
+            app.config = Config::for_toon_count(app.quick_setup_count);
+            app.is_dirty = true;
+            app.status_message = Some(format!("Created a {}-toon setup", app.quick_setup_count));
+        }
+    });
 }
 
 /// Renders the "Refresh windows" and "Add slot" buttons.

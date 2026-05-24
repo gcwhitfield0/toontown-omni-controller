@@ -23,14 +23,17 @@ A first run, end to end:
 
 1. **Launch Toontown** two or more times so you have several game windows open, and log
    a toon into each.
-2. **Start multitoon** with `cargo run --release` (or run the built binary). Its window
-   opens with two empty slots and an empty binding table.
+2. **Start multitoon** with `cargo run --release` (or run the built binary). At the top
+   of the left panel, use **Quick setup**: set *Number of toons* to how many you run
+   and click **Generate**. That creates that many slots, each pre-bound to WASD + Space
+   broadcast to every toon — so you only need to link windows. (You can still fine-tune
+   individual slots and bindings afterward; see the advanced editor on the right.)
 3. **Link each slot to a window** with its crosshair. Each slot row has a draggable
    **✛ crosshair**: press it and drag the cursor over the Toontown window you want
    that slot to control, then release. multitoon detects the window under the cursor
    and links it; the slot row shows the linked window's title and the status bar
-   confirms. Use *Add slot* if you need more than two (up to 10), and rename slots
-   inline (e.g. `Tank`, `Healer`).
+   confirms. Use *Add slot* / *Remove slot* to match your toon count (2–10), and
+   rename slots inline (e.g. `Tank`, `Healer`).
    *(The optional **Refresh windows** button just pre-lists open Toontown windows so
    titles display immediately; linking does not require it.)*
 5. **Add a binding** — click *Add binding* in the central panel. Set its *Physical key*

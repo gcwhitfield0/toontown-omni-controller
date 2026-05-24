@@ -49,6 +49,8 @@ pub struct MultiToonApp {
     pub(crate) status_message: Option<String>,
     /// What to highlight this frame, set by the slots panel and applied after layout.
     pub(crate) requested_highlight: Option<HighlightIntent>,
+    /// Desired toon count for the "Quick setup" generator (edited in the slots panel).
+    pub(crate) quick_setup_count: usize,
 }
 
 impl MultiToonApp {
@@ -56,6 +58,7 @@ impl MultiToonApp {
     /// normalizing the slot count into the supported range.
     pub fn new(mut config: Config, config_path: PathBuf, platform: Box<dyn Platform>) -> Self {
         normalize_slot_count(&mut config);
+        let quick_setup_count = config.slots.len();
         MultiToonApp {
             config,
             config_path,
@@ -65,6 +68,7 @@ impl MultiToonApp {
             is_dirty: false,
             status_message: None,
             requested_highlight: None,
+            quick_setup_count,
         }
     }
 

@@ -33,14 +33,11 @@ pub struct Config {
 }
 
 impl Default for Config {
-    /// A fresh config with two unbound slots and the documented default hotkeys.
+    /// A minimal but working starting point: the smallest supported toon count with
+    /// default movement bindings. Users scale to their own count with the one-click
+    /// "Quick setup" ([`Config::for_toon_count`]).
     fn default() -> Self {
-        Config {
-            slots: vec![Slot::new("Toon 1"), Slot::new("Toon 2")],
-            bindings: Vec::new(),
-            toggle_individual_mode_hotkey: Key::PageUp,
-            cycle_individual_slot_hotkey: Key::PageDown,
-        }
+        Config::for_toon_count(MIN_SLOTS)
     }
 }
 
@@ -69,6 +66,43 @@ impl Config {
         let text = serde_json::to_string_pretty(self).context("serializing config")?;
         fs::write(path, text).with_context(|| format!("writing config to {}", path.display()))?;
         Ok(())
+    }
+
+    /// Builds a complete setup for `toon_count` toons: that many generically-labeled
+    /// slots plus default movement bindings broadcast to all of them. The count is
+    /// clamped to the supported range. Powers the UI's one-click "Quick setup", so a
+    /// player with any number of toons gets a ready-to-use config without hand-editing.
+    pub fn for_toon_count(toon_count: usize) -> Config {
+        let count = toon_count.clamp(MIN_SLOTS, MAX_SLOTS);
+        let slots = (1..=count)
+            .map(|number| Slot::new(&format!("Toon {number}")))
+            .collect();
+        Config {
+            slots,
+            bindings: Config::default_bindings(count),
+            toggle_individual_mode_hotkey: Key::PageUp,
+            cycle_individual_slot_hotkey: Key::PageDown,
+        }
+    }
+
+    /// Movement bindings that broadcast each common movement key to every slot, so all
+    /// linked toons walk together: WASD for movement plus Space to jump — the typical
+    /// multitooning control set. Also the target of the UI's "Reset to default
+    /// bindings" button.
+    pub fn default_bindings(slot_count: usize) -> Vec<Binding> {
+        const MOVEMENT_KEYS: [Key; 5] = [Key::W, Key::A, Key::S, Key::D, Key::Space];
+        MOVEMENT_KEYS
+            .iter()
+            .map(|&key| Binding {
+                physical_key: key,
+                outputs: (0..slot_count)
+                    .map(|index| KeyOutput {
+                        slot_index: index as SlotIndex,
+                        output_key: key,
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Reports whether the same physical key is bound more than once, which is
@@ -151,9 +185,12 @@ mod tests {
     #[test]
     fn config_round_trips_through_serde_json() {
         let mut config = Config::default();
-        config.slots.push(Slot::new("Toon 3"));
+        let original_slot_count = config.slots.len();
+        config.slots.push(Slot::new("Extra"));
         // A window target is set, but serde must skip it on the round trip.
         config.slots[0].target = Some(WindowTarget::Linux { window_id: 42 });
+        // Replace the default movement bindings with a single known one to assert on.
+        config.bindings.clear();
         config.bindings.push(Binding {
             physical_key: Key::W,
             outputs: vec![
@@ -171,7 +208,7 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let restored: Config = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(restored.slots.len(), 3);
+        assert_eq!(restored.slots.len(), original_slot_count + 1);
         assert_eq!(restored.slots[0].label, "Toon 1");
         // Targets are intentionally dropped on save and come back as None.
         assert!(restored.slots[0].target.is_none());

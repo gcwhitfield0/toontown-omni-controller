@@ -1,7 +1,7 @@
 //! The central panel: the multi-toon binding table. Each binding maps one physical
 //! key to a list of `(slot, output key)` deliveries. Used only in multi-toon mode.
 
-use crate::config::{Binding, KeyOutput, SlotIndex};
+use crate::config::{Binding, Config, KeyOutput, SlotIndex};
 use crate::key::Key;
 use crate::ui::{key_combo, MultiToonApp};
 
@@ -18,10 +18,29 @@ struct PendingEdits {
 pub(crate) fn show(app: &mut MultiToonApp, ui: &mut egui::Ui) {
     ui.heading("Bindings (multi-toon mode)");
     ui.label("Each physical key fans out to one or more slots.");
-    if ui.button("Add binding").clicked() {
-        add_binding(app);
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Add binding").clicked() {
+            add_binding(app);
+        }
+        // Regenerate arrow-key-to-all-slots defaults for the current slot count.
+        if ui
+            .button("Reset to default bindings")
+            .on_hover_text("Arrow keys broadcast to every slot")
+            .clicked()
+        {
+            app.config.bindings = Config::default_bindings(app.config.slots.len());
+            app.is_dirty = true;
+        }
+    });
     ui.separator();
+
+    if app.config.bindings.is_empty() {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "No bindings: multi-toon mode won't forward anything. Click \"Reset to \
+             default bindings\", add bindings, or use Individual mode (PageUp).",
+        );
+    }
 
     // Snapshot slot labels so the output dropdowns can render while bindings mutate.
     let slot_labels: Vec<String> = app

@@ -2,8 +2,9 @@
 //! on the root window and injects synthetic `KeyPress`/`KeyRelease` events.
 //!
 //! Wayland is not supported; under a Wayland session this works only through the
-//! XWayland compatibility layer. A fresh connection is opened per call, which keeps
-//! the type free of stored state at the cost of a little reconnection overhead.
+//! XWayland compatibility layer. Enumeration and the cursor picker open a throwaway
+//! connection per call, while key injection and the highlight overlay each keep a
+//! long-lived connection (see [`LinuxPlatform`]).
 
 use crate::config::WindowTarget;
 use crate::key::Key;
@@ -20,20 +21,43 @@ use x11rb::rust_connection::RustConnection;
 /// Case-insensitive substring a window title must contain to be treated as Toontown.
 const TOONTOWN_TITLE_FILTER: &str = "toontown";
 
-/// The X11 [`Platform`] implementation. Window enumeration and key injection open a
-/// fresh connection per call; the highlight overlay keeps its own long-lived
-/// connection (in [`LinuxPlatform::overlay`]) because its windows must persist.
+/// The X11 [`Platform`] implementation.
+///
+/// Window enumeration and the cursor picker open a fresh connection per call (not
+/// latency-sensitive). Key injection and the highlight overlay each keep a long-lived
+/// connection: injection because reconnecting and re-querying the keymap per keystroke
+/// is far too slow under key-repeat, and the overlay because its windows must persist.
 pub struct LinuxPlatform {
+    /// Lazily created, reused connection + cached keymap for fast key injection.
+    injector: RefCell<Option<Injector>>,
     /// Lazily created overlay state for window highlighting.
     overlay: RefCell<Option<Overlay>>,
 }
 
 impl LinuxPlatform {
-    /// Creates a platform handle with no overlay yet (built on first highlight).
+    /// Creates a platform handle; the injector and overlay are built on first use.
     pub fn new() -> Self {
         LinuxPlatform {
+            injector: RefCell::new(None),
             overlay: RefCell::new(None),
         }
+    }
+
+    /// Sends one key event to an X11 window through the cached injector connection.
+    fn inject(&self, target: &WindowTarget, key: Key, pressed: bool) -> Result<()> {
+        let WindowTarget::Linux { window_id } = target else {
+            return Err(anyhow!(
+                "non-X11 window target passed to the Linux platform"
+            ));
+        };
+        let mut guard = self.injector.borrow_mut();
+        if guard.is_none() {
+            *guard = Some(Injector::new()?);
+        }
+        if let Some(injector) = guard.as_ref() {
+            injector.send(*window_id, key.to_x11_keysym(), pressed)?;
+        }
+        Ok(())
     }
 }
 
@@ -67,11 +91,11 @@ impl Platform for LinuxPlatform {
     }
 
     fn send_key_down(&self, target: &WindowTarget, key: Key) -> Result<()> {
-        inject_key(target, key, true)
+        self.inject(target, key, true)
     }
 
     fn send_key_up(&self, target: &WindowTarget, key: Key) -> Result<()> {
-        inject_key(target, key, false)
+        self.inject(target, key, false)
     }
 
     fn set_highlight(&self, highlight: Option<Highlight>) -> Result<()> {
@@ -200,24 +224,41 @@ fn absolute_rect(
     Ok((origin.dst_x, origin.dst_y, geometry.width, geometry.height))
 }
 
-/// Resolves a key to a server keycode and sends one synthetic event to its window.
-fn inject_key(target: &WindowTarget, key: Key, pressed: bool) -> Result<()> {
-    let window = match target {
-        WindowTarget::Linux { window_id } => *window_id,
-        _ => {
-            return Err(anyhow!(
-                "non-X11 window target passed to the Linux platform"
-            ))
-        }
-    };
-    let (connection, root) = connect()?;
-    let keycode = keysym_to_keycode(&connection, key.to_x11_keysym())?
-        .ok_or_else(|| anyhow!("no keycode maps to keysym for {key}"))?;
-    send_synthetic_key(&connection, root, window, keycode, pressed)
+/// A reused X11 connection plus a precomputed keysym→keycode table, so injecting a
+/// keystroke costs one synthetic event instead of a reconnect and a keymap query.
+struct Injector {
+    connection: RustConnection,
+    root: Window,
+    keysym_to_keycode: std::collections::HashMap<u32, u8>,
 }
 
-/// Searches the server's keyboard mapping for the keycode that produces `keysym`.
-fn keysym_to_keycode(connection: &RustConnection, keysym: u32) -> Result<Option<u8>> {
+impl Injector {
+    /// Opens the injection connection and builds the keysym→keycode table once.
+    fn new() -> Result<Injector> {
+        let (connection, screen_num) =
+            x11rb::connect(None).context("opening X11 connection for key injection")?;
+        let root = connection.setup().roots[screen_num].root;
+        let keysym_to_keycode = build_keysym_table(&connection)?;
+        Ok(Injector {
+            connection,
+            root,
+            keysym_to_keycode,
+        })
+    }
+
+    /// Sends one synthetic `KeyPress`/`KeyRelease` for `keysym` to `window`.
+    fn send(&self, window: Window, keysym: u32, pressed: bool) -> Result<()> {
+        let keycode = *self
+            .keysym_to_keycode
+            .get(&keysym)
+            .ok_or_else(|| anyhow!("no keycode maps to keysym {keysym:#x}"))?;
+        send_synthetic_key(&self.connection, self.root, window, keycode, pressed)
+    }
+}
+
+/// Reads the server keyboard mapping once and inverts it into keysym → keycode, taking
+/// the first keycode that produces each keysym.
+fn build_keysym_table(connection: &RustConnection) -> Result<std::collections::HashMap<u32, u8>> {
     let setup = connection.setup();
     let min_keycode = setup.min_keycode;
     let count = setup.max_keycode - min_keycode + 1;
@@ -226,13 +267,15 @@ fn keysym_to_keycode(connection: &RustConnection, keysym: u32) -> Result<Option<
         .reply()?;
     let per_code = mapping.keysyms_per_keycode as usize;
 
-    for (index, candidate) in mapping.keysyms.iter().enumerate() {
-        if *candidate == keysym {
-            let keycode = min_keycode as usize + index / per_code;
-            return Ok(Some(keycode as u8));
+    let mut table = std::collections::HashMap::new();
+    for (index, keysym) in mapping.keysyms.iter().enumerate() {
+        if *keysym == 0 {
+            continue; // unused slot in the keymap
         }
+        let keycode = (min_keycode as usize + index / per_code) as u8;
+        table.entry(*keysym).or_insert(keycode);
     }
-    Ok(None)
+    Ok(table)
 }
 
 /// Sends a single synthetic `KeyPress` or `KeyRelease` directly to `window`.
