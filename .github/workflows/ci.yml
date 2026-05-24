@@ -14,9 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    defaults:
-      run:
-        working-directory: multitoon
     steps:
       - uses: actions/checkout@v4
 
@@ -27,8 +24,6 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: multitoon
 
       # eframe/egui's transitive deps (xcb, xkbcommon, ...) need dev headers to link
       # on Linux. macOS and Windows pull their UI libraries from the system SDK.
